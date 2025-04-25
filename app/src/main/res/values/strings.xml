@@ -1,0 +1,14 @@
+<resources>
+    <string name="label_volume">Master Volume (CC 7)</string>
+    <string name="label_effect_mix">Effect Mix (CC 91)</string>
+    <string name="label_transpose">Transpose (CC 102)</string>
+    <string name="label_scale">Scale (CC 85)</string>
+    <string name="label_waveform">Waveform (CC 90)</string>
+    <string name="label_filter_res">Filter Resonance (CC 71)</string>
+    <string name="label_filter_cutoff">Filter Cutoff (CC 74)</string>
+
+    <string name="err_no_device">No MIDI device found</string>
+    <string name="err_open_device">Failed to open MIDI device</string>
+    <string name="err_open_port">Failed to open MIDI input port</string>
+    <string name="err_send">Failed to send MIDI CC %1$d</string>
+</resources>
