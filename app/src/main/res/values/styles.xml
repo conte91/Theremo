@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="CustomSeekBar" parent="Widget.AppCompat.SeekBar">
+    <item name="android:thumb">@drawable/custom_thumb</item>
+    <item name="android:progressDrawable">@drawable/custom_progress</item>
+    <item name="android:splitTrack">false</item>
+    <item name="android:padding">4dp</item>
+  </style>
+</resources>

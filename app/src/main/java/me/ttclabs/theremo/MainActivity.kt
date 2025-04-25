@@ -1,21 +1,32 @@
 // vim: set filetype=kotlin ts=4 sw=4 et:
-package com.example.mididevices
+package me.ttclabs.theremo
 
-import android.view.LayoutInflater
+import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.media.midi.*
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.ContextThemeWrapper
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import me.ttclabs.theremo.R
+
+fun Int.dpToPx(context: Context) = (this * context.resources.displayMetrics.density).toInt()
 
 class MainActivity : AppCompatActivity() {
     private var midiPort: MidiInputPort? = null
@@ -38,19 +49,30 @@ class MainActivity : AppCompatActivity() {
             max: Int,
             label: String
         ): View {
-            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            val labelView = TextView(context).apply { text = "$label: ??? (min: $min, max: $max)" }
-            val seek = SeekBar(context).apply {
+            val layout = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(16.dpToPx(context),16.dpToPx(context),16.dpToPx(context),16.dpToPx(context))
+            }
+            val labelView = TextView(context).apply {
+                textSize = 18f
+                text = "$label: ??? (min: $min, max: $max)"
+                setTextColor(ContextCompat.getColor(context, R.color.white))
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val seek = SeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), null, 0).apply {
                 this.max = max
-                progress = 0
                 isEnabled = context.midiReady
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    48.dpToPx(context)
+                ).apply { topMargin = 8.dpToPx(context) }
+                setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener{
                     override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) {
-                        context.sendCC(cc, p)
-                        labelView.text = "$label: $p (min: $min, max: $max)"
+                        context.sendCC(cc,p)
+                        labelView.text = "$label: $p (min:$min,max:$max)"
                     }
-                    override fun onStartTrackingTouch(s: SeekBar?) {}
-                    override fun onStopTrackingTouch(s: SeekBar?) {}
+                    override fun onStartTrackingTouch(s: SeekBar?){}
+                    override fun onStopTrackingTouch(s: SeekBar?){}
                 })
             }
             layout.addView(labelView)
