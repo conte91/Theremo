@@ -287,7 +287,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 devices.forEachIndexed { index, device ->
                     deviceContainer.addView(Button(this).apply {
-                        text = "Device $index: "
+                        val props = device.getProperties()
+                        val name = props.getString(MidiDeviceInfo.PROPERTY_NAME)
+                        val manufacturer = props.getString(MidiDeviceInfo.PROPERTY_MANUFACTURER)
+                        val product = props.getString(MidiDeviceInfo.PROPERTY_PRODUCT)
+                        text = "Device $index: $name, Manufacturer: $manufacturer, Product: $product"
                         setOnClickListener {
                             midiManager.openDevice(device, { dev ->
                                 if (dev == null) {
