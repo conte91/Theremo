@@ -50,6 +50,7 @@ class PercentMidiValueFormatter : MidiValueFormatter {
 
 class BilateralPercentMidiValueFormatter(private val minPercent: Int, private val maxPercent: Int) : MidiValueFormatter {
     override fun valToString(value: Int, min: Int, max: Int): String {
+        // for bilateral parameters: 0 is min%, 64 is dead zero, 127 is max%.
         val ratio = (value - min).toDouble() / (max - min).toDouble()
         val percentValue = ratio * (maxPercent - minPercent) + minPercent
         return String.format("%.02f%%", percentValue)
@@ -85,7 +86,7 @@ fun linearMidiParameter(name: String, cc: Int, min: Double, max: Double, default
 }
 
 fun labeledSliderView(
-    context: MainActivity,
+    context: Context,
     theremidi: ThereminiState,
     parameter: MidiParameter,
 ): View {
@@ -94,28 +95,26 @@ fun labeledSliderView(
         setPadding(16.dpToPx(context),16.dpToPx(context),16.dpToPx(context),16.dpToPx(context))
     }
     val labelView = TextView(context, null, 0, R.style.SeekBarText).apply {
-        text = "${parameter.name}: ??? (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
     }
     // initialize to default
-    val seek = MidiSeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), theremidi, parameter.cc, {
-            labelView.text = "${parameter.name}: ${parameter.valToString(it)} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
+    val seek = MidiSeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), theremidi, parameter.cc, parameter.range, {
+        val humanReadable = it?.let { parameter.valToString(it) } ?: "???"
+        labelView.text = "${parameter.name}: ${humanReadable} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
     }).apply {
-        this.max = parameter.range.max
-        this.min = parameter.range.min
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             48.dpToPx(context)
         ).apply { topMargin = 8.dpToPx(context) }
     }
+
     val resetBtn = Button(context).apply {
         text = "Reset"
         setOnClickListener {
             seek.setProgressAndNotify(parameter.defaultValue())
-            labelView.text = "${parameter.name}: ${parameter.valToString(parameter.defaultValue())} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
         }
     }
     val controls = LinearLayout(context).apply {
@@ -141,7 +140,6 @@ fun labeledSliderView(
 
     controls.addView(seek)
     controls.addView(resetBtn)
-
 
     layout.addView(labelView)
     layout.addView(controls)
@@ -176,6 +174,10 @@ class ThereminiState(private val connection: ThereminiConnection) {
         midiParams[cc] = value
     }
 
+    fun getCachedValue(cc: Int): Int? {
+        return midiParams[cc]
+    }
+
     fun close() {
         connection.close()
     }
@@ -183,9 +185,18 @@ class ThereminiState(private val connection: ThereminiConnection) {
 
 class ResettableSeekBar(
     context: Context,
+    min: Int,
+    max: Int,
+    startValue: Int?,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = android.R.attr.seekBarStyle
 ) : SeekBar(context, attrs, defStyleAttr) {
+
+    init {
+        this.min = min
+        this.max = max
+        progress = startValue?:0
+    }
 
     private var userHasInteracted = false
     private var externalListener: OnSeekBarChangeListener? = null
@@ -231,9 +242,11 @@ fun MidiSeekBar (
     context: Context,
     theremidi: ThereminiState,
     cc: Int = 0,
-    changeCallback: (value: Int) -> Unit
+    range: MidiControlRange,
+    changeCallback: (value: Int?) -> Unit
 ): ResettableSeekBar {
-    var seekbar = ResettableSeekBar(context)
+    val currentVal = theremidi.getCachedValue(cc)
+    var seekbar = ResettableSeekBar(context, range.min, range.max, currentVal)
     seekbar.setOnSeekBarChangeListener (object: OnSeekBarChangeListener {
         override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
             try {
@@ -248,6 +261,9 @@ fun MidiSeekBar (
         override fun onStopTrackingTouch(sb: SeekBar?) {
         }
     })
+
+    // Advertise current value to listeners
+    changeCallback(currentVal)
     return seekbar
 }
 
@@ -356,20 +372,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(container)
 
         val pages = listOf(
-            MidiControlPage("Volume", {VolumeFragment(theremidi!!)}),
-            MidiControlPage("Scale", {ScaleFragment(theremidi!!)}),
-            MidiControlPage("Transpose", {TransposeFragment(theremidi!!)}),
-            MidiControlPage("Waveform", {WaveformFragment(theremidi!!)}),
-            MidiControlPage("Filter", {FilterFragment(theremidi!!)}),
-            MidiControlPage("Effect Mix", {EffectMixFragment(theremidi!!)}),
-            MidiControlPage("Modulation 1", {Mod1Fragment(theremidi!!)}),
-            MidiControlPage("Modulation 2", {Mod2Fragment(theremidi!!)}),
-            MidiControlPage("Mod Targeting", {ModTargetFragment(theremidi!!)}),
-            MidiControlPage("Scan/Wavetable", {ScanFragment(theremidi!!)}),
-            MidiControlPage("Delay", {DelayFragment(theremidi!!)}),
-            MidiControlPage("Pitch Correction", {PitchCorrectionFragment(theremidi!!)}),
-            MidiControlPage("Preset", {PresetFragment(theremidi!!)}),
-            MidiControlPage("Back to Setup", {DeviceSetupFragment()}),
+            MidiControlPage("Volume", {VolumeFragment(this, theremidi!!)}),
+            MidiControlPage("Scale", {ScaleFragment(this, theremidi!!)}),
+            MidiControlPage("Transpose", {TransposeFragment(this, theremidi!!)}),
+            MidiControlPage("Waveform", {WaveformFragment(this, theremidi!!)}),
+            MidiControlPage("Filter", {FilterFragment(this, theremidi!!)}),
+            MidiControlPage("Effect Mix", {EffectMixFragment(this, theremidi!!)}),
+            MidiControlPage("Volume Antenna", {VolumeAntennaFragment(this, theremidi!!)}),
+            MidiControlPage("Pitch Antenna", {PitchAntennaFragment(this, theremidi!!)}),
+            MidiControlPage("Mod Targeting", {ModTargetFragment(this, theremidi!!)}),
+            MidiControlPage("Scan/Wavetable", {ScanFragment(this, theremidi!!)}),
+            MidiControlPage("Delay", {DelayFragment(this, theremidi!!)}),
+            MidiControlPage("Pitch Correction", {PitchCorrectionFragment(this, theremidi!!)}),
+            MidiControlPage("Preset", {PresetFragment(this, theremidi!!)}),
+            MidiControlPage("Back to Setup", {DeviceSetupFragment(this)}),
         )
         viewPager.adapter = object : FragmentStateAdapter(this) {
             override fun getItemCount() = pages.size
@@ -381,13 +397,13 @@ class MainActivity : AppCompatActivity() {
         }.attach()
     }
 
-    class VolumeFragment(private val theremidi: ThereminiState) : Fragment() {
+    class VolumeFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             inflater: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View = ScrollView(requireContext()).apply {
+        ): View = ScrollView(context).apply {
             addView(
                 labeledSliderView(
-                    requireActivity() as MainActivity,
+                    context,
                     theremidi,
                     percentMidiParameter("Master Volume", 7, 100)
                 )
@@ -395,33 +411,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    class ScaleFragment(private val theremidi: ThereminiState) : Fragment() {
+    class ScaleFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(TextView(requireContext()).apply { text = "Scale (CC 85)" })
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(TextView(context).apply { text = "Scale (CC 85)" })
             listOf(
                 "Chromatic","Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian",
                 "Locrian","Maj Blues","Min Blues","Dim","Maj Penta","Min Penta","Spanish",
                 "Gypsy","Arabian","Egyptian","Ryukyu","Wholetone","Maj 3rd","Min 3rd","5th"
             ).forEachIndexed { idx, name ->
-                layout.addView(Button(requireContext()).apply {
+                layout.addView(Button(context).apply {
                     text = "$idx: $name"
                     setOnClickListener { theremidi.setParam(85, idx) }
                 })
             }
-            return ScrollView(requireContext()).apply { addView(layout) }
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class TransposeFragment(private val theremidi: ThereminiState) : Fragment() {
+    class TransposeFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View = ScrollView(requireContext()).apply {
+        ): View = ScrollView(context).apply {
             addView(
                 labeledSliderView(
-                    requireActivity() as MainActivity,
+                    context,
                     theremidi,
                     percentMidiParameter("Transpose", 102, 0)
                 )
@@ -429,139 +445,138 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    class WaveformFragment(private val theremidi: ThereminiState)  : Fragment() {
+    class WaveformFragment(private val context: Context, private val theremidi: ThereminiState)  : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(TextView(requireContext()).apply { text = "Waveform (CC 90)" })
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(TextView(context).apply { text = "Waveform (CC 90)" })
             listOf("Sine","Triangle","Super Saw","Animoog 1","Animoog 2","Animoog 3","Etherwave")
             .forEachIndexed { idx, name ->
-                layout.addView(Button(requireContext()).apply {
+                layout.addView(Button(context).apply {
                     text = "$idx: $name"
                     setOnClickListener { theremidi.setParam(90, idx) }
                 })
             }
-            return ScrollView(requireContext()).apply { addView(layout) }
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class FilterFragment(private val theremidi: ThereminiState) : Fragment() {
+    class FilterFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("Filter cutoff", 74, 0)));
-            layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("Filter Resonance", 71, 0)))
-            layout.addView(TextView(requireContext()).apply { text = "Filter Type (CC 80)" })
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Filter cutoff", 74, 0)));
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Filter Resonance", 71, 0)))
+            layout.addView(TextView(context).apply { text = "Filter Type (CC 80)" })
             listOf("Bypass", "Lowpass", "Bandpass", "Highpass", "Notch", "Animoog 3", "Etherwave")
             .forEachIndexed { idx, name ->
-                layout.addView(Button(requireContext()).apply {
+                layout.addView(Button(context).apply {
                     text = "$idx: $name"
                     setOnClickListener { theremidi.setParam(80, idx) }
                 })
             }
-            return ScrollView(requireContext()).apply { addView(layout) }
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class EffectMixFragment(private val theremidi: ThereminiState) : Fragment() {
+    class EffectMixFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View = ScrollView(requireContext()).apply {
-            addView(labeledSliderView(requireActivity() as MainActivity, theremidi, percentMidiParameter("Effect Mix", 91, 0)))
+        ): View = ScrollView(context).apply {
+            addView(labeledSliderView(context, theremidi, percentMidiParameter("Effect Mix", 91, 0)))
         }
     }
 
-    class Mod1Fragment(private val theremidi: ThereminiState) : Fragment() {
-        override fun onCreateView(
-            i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Pitch Mod Scan Freq", 22, -400, 400)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Pitch Mod Scan Amount", 24, -400, 400)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Pitch Mod Resonance", 30, -400, 400)))
-            return ScrollView(requireContext()).apply { addView(layout) }
-        }
-    }
-
-    class Mod2Fragment(private val theremidi: ThereminiState) : Fragment() {
+    class PitchAntennaFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Vol Mod Scan Freq", 23, -400, 400)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Vol Mod Scan Amount", 25, -400, 400)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Vol Mod Volume", 26, 0, 1600)))
-            return ScrollView(requireContext()).apply { addView(layout) }
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(TextView(context, null, 0, R.style.SeekBarText).apply {
+                text = "These settings affect how much the pitch antenna modifies the filter and other parameters."
+            })
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff Pitch Tracking", 29, -800, 800)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 30, -400, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 24, -400, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 22, -400, 400)))
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class ModTargetFragment(private val theremidi: ThereminiState) : Fragment() {
+    class VolumeAntennaFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Vol Mod Cutoff", 27, -100, 100)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Vol Mod Resonance", 28, -200, 200)))
-            layout.addView(labeledSliderView(a, theremidi, bilateralMidiParameter("Filter Pitch Tracking", 29, -800, 800)))
-            return ScrollView(requireContext()).apply { addView(layout) }
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(TextView(context, null, 0, R.style.SeekBarText).apply {
+                text = "These settings affect how much the volume antenna modifies the filter and other params."
+            })
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff", 27, -100, 100)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 28, -200, 200)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Volume", 26, 0, 1600)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 25, -400, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 23, -400, 400)))
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class ScanFragment(private val theremidi: ThereminiState) : Fragment() {
+    class ModTargetFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            return ScrollView(context).apply { addView(layout) }
+        }
+    }
+
+    class ScanFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
+        override fun onCreateView(
+            i: LayoutInflater, c: ViewGroup?, s: Bundle?
+        ): View {
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             val scanRateFormatter = object : MidiValueFormatter {
                 override fun valToString(value: Int, min: Int, max: Int): String {
                     var f = String.format("%.02f", value.toFloat() / (max - min).toFloat() * 32)
                     return "${f}Hz"
                 }
             }
-            layout.addView(labeledSliderView(a, theremidi, MidiParameter("Wavetable Scan Rate", 9, 0, scanRateFormatter)))
-            layout.addView(labeledSliderView(a, theremidi, linearMidiParameter("Scan Amount", 20, 0.0, 2.0)))
-            layout.addView(labeledSliderView(a, theremidi, linearMidiParameter("Scan Position", 21, 0.0, 2.0)))
-            return ScrollView(requireContext()).apply { addView(layout) }
+            layout.addView(labeledSliderView(context, theremidi, MidiParameter("Wavetable Scan Rate", 9, 0, scanRateFormatter)))
+            layout.addView(labeledSliderView(context, theremidi, linearMidiParameter("Scan Amount", 20, 0.0, 2.0)))
+            layout.addView(labeledSliderView(context, theremidi, linearMidiParameter("Scan Position", 21, 0.0, 2.0)))
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class DelayFragment(private val theremidi: ThereminiState) : Fragment() {
+    class DelayFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(a, theremidi, linearMidiParameter("Delay Time", 12, 0.0, 0.83)))
-            layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("Delay Feedback", 14, 0)))
-            return ScrollView(requireContext()).apply { addView(layout) }
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            layout.addView(labeledSliderView(context, theremidi, linearMidiParameter("Delay Time", 12, 0.0, 0.83)))
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Delay Feedback", 14, 0)))
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
-    class PitchCorrectionFragment(private val theremidi: ThereminiState) : Fragment() {
+    class PitchCorrectionFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
         override fun onCreateView(
             i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View = ScrollView(requireContext()).apply {
-            val a = requireActivity() as MainActivity
-            val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-            addView(labeledSliderView(requireActivity() as MainActivity, theremidi, percentMidiParameter("Pitch Correction", 84, 0)))
-            layout.addView(TextView(requireContext()).apply { text = "Root Note (CC 86)" })
+        ): View = ScrollView(context).apply {
+            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            addView(labeledSliderView(context, theremidi, percentMidiParameter("Pitch Correction", 84, 0)))
+            layout.addView(TextView(context).apply { text = "Root Note (CC 86)" })
             listOf("C","C#","D","D#","E","F","F#","G","G#","A","A#","B")
             .forEachIndexed { idx, name ->
-                layout.addView(Button(requireContext()).apply {
+                layout.addView(Button(context).apply {
                     text = name
                     setOnClickListener { theremidi.setParam(86, idx) }
                 })
             }
-            layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("Low Note", 87, 0)))
-            layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("High Note", 88, 0)))
-            return ScrollView(requireContext()).apply { addView(layout) }
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Low Note", 87, 0)))
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("High Note", 88, 0)))
+            return ScrollView(context).apply { addView(layout) }
         }
     }
 
@@ -577,28 +592,27 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-class PresetFragment(private val theremidi: ThereminiState) : Fragment() {
+class PresetFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
     override fun onCreateView(
         i: LayoutInflater, c: ViewGroup?, s: Bundle?
     ): View {
-        val a = requireActivity() as MainActivity
-        val layout = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
-        layout.addView(labeledSliderView(a, theremidi, percentMidiParameter("Preset Volume", 103, 100)))
-        layout.addView(Button(requireContext()).apply {
+        val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Preset Volume", 103, 100)))
+        layout.addView(Button(context).apply {
             text = "Save Preset (CC 119)"
             setOnClickListener { theremidi.setParam(119, 0) }
         })
-        return ScrollView(requireContext()).apply { addView(layout) }
+        return ScrollView(context).apply { addView(layout) }
     }
 }
 
-class DeviceSetupFragment : Fragment() {
+class DeviceSetupFragment(private val context: Context) : Fragment() {
     override fun onCreateView(
         i: LayoutInflater, c: ViewGroup?, s: Bundle?
-    ): View = ScrollView(requireContext()).apply {
-        addView(LinearLayout(requireContext()).apply {
+    ): View = ScrollView(context).apply {
+        addView(LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            addView(Button(requireContext()).apply {
+            addView(Button(context).apply {
                 text = "Choose MIDI Device"
                 setOnClickListener { (activity as? MainActivity)?.showDeviceSelection() }
             })
