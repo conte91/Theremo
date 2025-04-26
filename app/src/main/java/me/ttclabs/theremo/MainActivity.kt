@@ -59,7 +59,7 @@ interface MidiValueFormatter {
 
 class PercentMidiValueFormatter(private var minPercent: Int, private var maxPercent: Int) : MidiValueFormatter {
     override fun valToString(value: Int): String {
-        val ratio = value / 127f
+        val ratio = value / 127.0
         val percent = (ratio * (maxPercent - minPercent)).toInt() + minPercent
         return "${percent}%"
     }
@@ -90,7 +90,7 @@ class MidiParameter(val name: String, val cc: Int, val default: Int, private val
     fun defaultValue(): Int = default
 }
 
-fun percentMidiParameter(name: String, cc: Int, defaultMidiVal: Int = 0, maxPercent: Int = 0): MidiParameter {
+fun percentMidiParameter(name: String, cc: Int, defaultMidiVal: Int = 0, maxPercent: Int = 100): MidiParameter {
     return MidiParameter(name, cc, defaultMidiVal, PercentMidiValueFormatter(0, maxPercent))
 }
 
