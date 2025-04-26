@@ -54,44 +54,48 @@ data class MidiControlRange(val min: Int, val max: Int) {
 }
 
 interface MidiValueFormatter {
-    fun valToString(value: Int, min: Int, max: Int): String
+    fun valToString(value: Int): String
 }
 
-class PercentMidiValueFormatter : MidiValueFormatter {
-    override fun valToString(value: Int, min: Int, max: Int): String = "${(value.toFloat() / (max - min).toFloat() * 100).toInt()}%"
+class PercentMidiValueFormatter(private var minPercent: Int, private var maxPercent: Int) : MidiValueFormatter {
+    override fun valToString(value: Int): String {
+        val ratio = value / 127f
+        val percent = (ratio * (maxPercent - minPercent)).toInt() + minPercent
+        return "${percent}%"
+    }
 }
 
-class BilateralPercentMidiValueFormatter(private val minPercent: Int, private val maxPercent: Int) : MidiValueFormatter {
-    override fun valToString(value: Int, min: Int, max: Int): String {
+class BilateralPercentMidiValueFormatter(private val extreme: Int) : MidiValueFormatter {
+    override fun valToString(value: Int): String {
         // for bilateral parameters: 0 is min%, 64 is dead zero, 127 is max%.
-        val ratio = (value - min).toDouble() / (max - min).toDouble()
-        val percentValue = ratio * (maxPercent - minPercent) + minPercent
+        val percentValue = when {
+            value < 64  -> -extreme * (1 - value / 64.0)            // 0→min, 64→0
+            value > 64  -> extreme * ((value - 64) / 63.0)        // 64→0, 127→max
+            else     -> 0.0                            // cc==64
+        }
         return String.format("%.02f%%", percentValue)
     }
 }
 
 class LinearMidiValueFormatter(private val min: Double, private val max: Double) : MidiValueFormatter {
-    override fun valToString(value: Int, min: Int, max: Int): String {
-        val ratio = (value - min).toDouble() / (max - min).toDouble()
-        val actualValue = ratio * (this.max - this.min) + this.min
+    override fun valToString(value: Int): String {
+        val ratio = value / 127.0
+        val actualValue = ratio * (max - min) + min
         return String.format("%.02f", actualValue)
     }
 }
 
 class MidiParameter(val name: String, val cc: Int, val default: Int, private val formatter: MidiValueFormatter, val range: MidiControlRange = MidiControlRange(0, 127)) {
-    init {
-        require(default in range.min..range.max) { "defaultValue must be between ${range.min} and ${range.max}" }
-    }
-    fun valToString(value: Int): String = formatter.valToString(value, range.min, range.max)
+    fun valToString(value: Int): String = formatter.valToString(value)
     fun defaultValue(): Int = default
 }
 
-fun percentMidiParameter(name: String, cc: Int, defaultPercent: Int = 0): MidiParameter {
-    return MidiParameter(name, cc, (defaultPercent * 127 / 100), PercentMidiValueFormatter())
+fun percentMidiParameter(name: String, cc: Int, defaultMidiVal: Int = 0, maxPercent: Int = 0): MidiParameter {
+    return MidiParameter(name, cc, defaultMidiVal, PercentMidiValueFormatter(0, maxPercent))
 }
 
-fun bilateralMidiParameter(name: String, cc: Int, minPercent: Int, maxPercent: Int): MidiParameter {
-    return MidiParameter(name, cc, 64, BilateralPercentMidiValueFormatter(minPercent, maxPercent))
+fun bilateralMidiParameter(name: String, cc: Int, extreme: Int): MidiParameter {
+    return MidiParameter(name, cc, 64, BilateralPercentMidiValueFormatter(extreme))
 }
 
 fun linearMidiParameter(name: String, cc: Int, min: Double, max: Double, defaultMidiVal: Int = 0): MidiParameter {
@@ -103,7 +107,7 @@ class NoteRangeFormatter : MidiValueFormatter {
     // Stupid how some notes are called with # and some with b.
     // But that's how they appear on the device's display :|
     val notes = listOf("C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
-    override fun valToString(value: Int, min: Int, max: Int): String = "${notes[value % notes.size]}${value / 12 - 1}"
+    override fun valToString(value: Int): String = "${notes[value % notes.size]}${value / 12 - 1}"
 }
 
 fun noteRangeParameter(name: String, cc: Int, default: Int): MidiParameter {
@@ -112,7 +116,7 @@ fun noteRangeParameter(name: String, cc: Int, default: Int): MidiParameter {
 
 class TransposeFormatter : MidiValueFormatter {
     // 64 is 0, 0 is -64 semitones, 127 is 63 semitones.
-    override fun valToString(value: Int, min: Int, max: Int): String = "${value - 64} semitones"
+    override fun valToString(value: Int): String = "${value - 64} semitones"
 }
 
 fun buttonGrid(context: Context, labels: Collection<String>, nCols: Int, clickCallback: (Int) -> Unit): View {
@@ -459,7 +463,7 @@ class MainActivity : AppCompatActivity() {
             inflater: LayoutInflater, c: ViewGroup?, s: Bundle?
         ): View = ScrollView(context).apply {
             val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Master Volume", 7, 100)))
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Master Volume", 7, 127)))
             layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("Low Note", 87, 12 * 3 /* C2 */)))
             layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("High Note", 88, 12 * 8 /* C7 */ )))
             layout.addView(labeledSliderView(
@@ -537,10 +541,10 @@ class MainActivity : AppCompatActivity() {
             layout.addView(TextView(context, null, 0, R.style.SeekBarText).apply {
                 text = "These settings affect how much the pitch antenna modifies the filter and other parameters."
             })
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff Pitch Tracking", 29, -800, 800)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 30, -400, 400)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 24, -400, 400)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 22, -400, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff Pitch Tracking", 29, 800)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 30, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 24, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 22, 400)))
             return ScrollView(context).apply { addView(layout) }
         }
     }
@@ -553,11 +557,11 @@ class MainActivity : AppCompatActivity() {
             layout.addView(TextView(context, null, 0, R.style.SeekBarText).apply {
                 text = "These settings affect how much the volume antenna modifies the filter and other params."
             })
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff", 27, -100, 100)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 28, -200, 200)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Volume", 26, 0, 1600)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 25, -400, 400)))
-            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 23, -400, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Cutoff", 27, 100)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Filter Resonance", 28, 200)))
+            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Volume", 26, 8 /* 100% */, 1600)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 25, 400)))
+            layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 23, 400)))
             return ScrollView(context).apply { addView(layout) }
         }
     }
@@ -577,8 +581,8 @@ class MainActivity : AppCompatActivity() {
         ): View {
             val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             val scanRateFormatter = object : MidiValueFormatter {
-                override fun valToString(value: Int, min: Int, max: Int): String {
-                    var f = String.format("%.02f", value.toFloat() / (max - min).toFloat() * 32)
+                override fun valToString(value: Int): String {
+                    var f = String.format("%.02f", value / 127f * 32)
                     return "${f}Hz"
                 }
             }
