@@ -441,7 +441,6 @@ class MainActivity : AppCompatActivity() {
             MidiControlPage("Filter", {FilterFragment(this, theremidi!!)}),
             MidiControlPage("Volume Antenna", {VolumeAntennaFragment(this, theremidi!!)}),
             MidiControlPage("Pitch Antenna", {PitchAntennaFragment(this, theremidi!!)}),
-            MidiControlPage("Mod Targeting", {ModTargetFragment(this, theremidi!!)}),
             MidiControlPage("Scan/Wavetable", {ScanFragment(this, theremidi!!)}),
             MidiControlPage("Delay", {DelayFragment(this, theremidi!!)}),
             MidiControlPage("Preset", {PresetFragment(this, theremidi!!)}),
@@ -562,15 +561,6 @@ class MainActivity : AppCompatActivity() {
             layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Volume", 26, 8 /* 100% */, 1600)))
             layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Amount", 25, 400)))
             layout.addView(labeledSliderView(context, theremidi, bilateralMidiParameter("Wavetable Scan Frequency", 23, 400)))
-            return ScrollView(context).apply { addView(layout) }
-        }
-    }
-
-    class ModTargetFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
-        override fun onCreateView(
-            i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View {
-            val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             return ScrollView(context).apply { addView(layout) }
         }
     }
