@@ -27,11 +27,17 @@ import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import me.ttclabs.theremo.R
 
 const val MIDI_MAX_VALUE = 127
 
 fun Int.dpToPx(context: Context) = (this * context.resources.displayMetrics.density).toInt()
+
+fun ByteArray.toHexString(): String =
+    joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
 
 data class MidiControlRange(val min: Int, val max: Int) {
     init {
@@ -183,23 +189,65 @@ fun labeledSliderView(
     return layout
 }
 
+data class MidiMessageLog(val send: Boolean, val bytes: ByteArray, val timestampMillis: Long)
+
+class MidiLogBuffer(private val capacity: Int) {
+    private val buffer = ArrayDeque<MidiMessageLog>(capacity)
+    private var logCallback: ((MidiMessageLog) -> Unit)? = null
+
+    fun log(entry: MidiMessageLog) {
+        if (buffer.size == capacity) {
+            buffer.removeFirst()
+        }
+        logCallback?.invoke(entry)
+        buffer.addLast(entry)
+    }
+
+    // The callback is invoked _before_ the log entry is added into the buffer.
+    fun setLogCallback(cb: ((MidiMessageLog) -> Unit)?) {
+        logCallback = cb
+    }
+
+    fun getLogs(): Collection<MidiMessageLog> {
+        return buffer
+    }
+}
+
 class ThereminiConnection(
-    private val midiPort: MidiInputPort
+    private val midiIn: MidiInputPort,
+    private val midiOut: MidiOutputPort,
 ) {
     private val TAG = ThereminiConnection::class.java.simpleName ?: "ThereminiConnection"
+    private val logBuffer = MidiLogBuffer(100)
+
+    init {
+        val receiver = object : MidiReceiver() {
+            override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
+                // Timestamp passed in as parameter is not wall time, it is boot time in ns.
+                logBuffer.log(MidiMessageLog(false, msg.copyOfRange(offset, offset + count), System.currentTimeMillis()))
+            }
+        }
+        midiOut.connect(receiver)
+    }
 
     fun sendCC(cc: Int, value: Int) {
         val msg = byteArrayOf(0xB0.toByte(), cc.toByte(), value.toByte())
         try {
-            midiPort?.send(msg, 0, msg.size) ?: throw Exception("MIDI port not initialized")
+            midiIn.send(msg, 0, msg.size) ?: throw Exception("MIDI port not initialized")
+            logBuffer.log(MidiMessageLog(true, msg, System.currentTimeMillis()))
         } catch (e: Exception) {
             Log.e(TAG, "Error sending MIDI CC $cc: ${e.message}")
             throw e
         }
     }
 
+    fun getMidiLogBuffer(): MidiLogBuffer {
+        return logBuffer
+    }
+
     fun close() {
-        midiPort.close()
+        midiIn.close()
+        midiOut.close()
     }
 }
 
@@ -217,6 +265,10 @@ class ThereminiState(private val connection: ThereminiConnection) {
 
     fun close() {
         connection.close()
+    }
+
+    fun getConnection(): ThereminiConnection {
+        return connection
     }
 }
 
@@ -344,7 +396,7 @@ class MainActivity : AppCompatActivity() {
                         val name = props.getString(MidiDeviceInfo.PROPERTY_NAME)
                         val manufacturer = props.getString(MidiDeviceInfo.PROPERTY_MANUFACTURER)
                         val product = props.getString(MidiDeviceInfo.PROPERTY_PRODUCT)
-                        text = "Device $index: $name, Manufacturer: $manufacturer, Product: $product"
+                        text = "Device $index: $name"
                         setOnClickListener {
                             midiManager.openDevice(device, { dev ->
                                 if (dev == null) {
@@ -352,12 +404,17 @@ class MainActivity : AppCompatActivity() {
                                     return@openDevice
                                 }
                                 midiDevice = dev
-                                var midiPort = dev.openInputPort(0)
-                                if (midiPort == null) {
-                                    toast("Failed to open device's MIDI port.")
+                                var midiIn = dev.openInputPort(0)
+                                if (midiIn == null) {
+                                    toast("Failed to open device's MIDI input port.")
                                     return@openDevice
                                 }
-                                theremidi = ThereminiState(ThereminiConnection(midiPort))
+                                var midiOut = dev.openOutputPort(0)
+                                if (midiOut == null) {
+                                    toast("Failed to open device's MIDI output port.")
+                                    return@openDevice
+                                }
+                                theremidi = ThereminiState(ThereminiConnection(midiIn, midiOut))
                                 runOnUiThread {
                                     stopDevicePolling()
                                     showMainUI()
@@ -419,6 +476,7 @@ class MainActivity : AppCompatActivity() {
             MidiControlPage("Scan/Wavetable", {ScanFragment(this, theremidi!!)}),
             MidiControlPage("Delay", {DelayFragment(this, theremidi!!)}),
             MidiControlPage("Preset", {PresetFragment(this, theremidi!!)}),
+            MidiControlPage("MIDI log", {MidiLogFragment(this, theremidi!!)}),
             MidiControlPage("Back to Setup", {DeviceSetupFragment(this)}),
         )
         viewPager.adapter = object : FragmentStateAdapter(this) {
@@ -601,6 +659,41 @@ class PresetFragment(private val context: Context, private val theremidi: Therem
             setOnClickListener { theremidi.setParam(119, 0) }
         })
         return ScrollView(context).apply { addView(layout) }
+    }
+}
+
+class MidiLogFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
+    private val timestampFmt = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault())
+    private val logBuffer = theremidi.getConnection().getMidiLogBuffer()
+
+    private fun formatLog(log: MidiMessageLog): String {
+        val direction = if (log.send) ">" else "<"
+        val timestamp = timestampFmt.format(Instant.ofEpochMilli(log.timestampMillis))
+        val msg = log.bytes.toHexString()
+        return "[${timestamp}] ${direction} ${msg}"
+    }
+
+    override fun onCreateView(
+        i: LayoutInflater, c: ViewGroup?, s: Bundle?
+    ): View {
+        val view = TextView(context).apply {
+            val logs = logBuffer.getLogs()
+            if (logs.isEmpty()) {
+                text = "<No MIDI logs available>"
+            } else {
+                text = logs.joinToString("\n") { formatLog(it) }
+            }
+        }
+        logBuffer.setLogCallback({ log ->
+            view.post {
+                // If we had the "No MIDI logs" message, reset it.
+                if (logBuffer.getLogs().isEmpty()) {
+                    view.text = ""
+                }
+                view.append("\n${formatLog(log)}")
+            }
+        })
+        return ScrollView(context).apply { addView(view) }
     }
 }
 
