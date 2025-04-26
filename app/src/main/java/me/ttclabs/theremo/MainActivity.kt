@@ -90,11 +90,16 @@ class NoteRangeFormatter : MidiValueFormatter {
     // Stupid how some notes are called with # and some with b.
     // But that's how they appear on the device's display :|
     val notes = listOf("C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
-    override fun valToString(value: Int, min: Int, max: Int): String = "${notes[value % notes.size]}${value / 12 - 1}%"
+    override fun valToString(value: Int, min: Int, max: Int): String = "${notes[value % notes.size]}${value / 12 - 1}"
 }
 
 fun noteRangeParameter(name: String, cc: Int, default: Int): MidiParameter {
     return MidiParameter(name, cc, default, NoteRangeFormatter())
+}
+
+class TransposeFormatter : MidiValueFormatter {
+    // 64 is 0, 0 is -64 semitones, 127 is 63 semitones.
+    override fun valToString(value: Int, min: Int, max: Int): String = "${value - 64} semitones"
 }
 
 fun buttonGrid(context: Context, labels: Collection<String>, nCols: Int, clickCallback: (Int) -> Unit): View {
@@ -406,7 +411,6 @@ class MainActivity : AppCompatActivity() {
         val pages = listOf(
             MidiControlPage("Volume & Range", {MainFragment(this, theremidi!!)}),
             MidiControlPage("Pitch Correction", {PitchCorrectionFragment(this, theremidi!!)}),
-            MidiControlPage("Transpose", {TransposeFragment(this, theremidi!!)}),
             MidiControlPage("Waveform", {WaveformFragment(this, theremidi!!)}),
             MidiControlPage("Filter", {FilterFragment(this, theremidi!!)}),
             MidiControlPage("Volume Antenna", {VolumeAntennaFragment(this, theremidi!!)}),
@@ -435,6 +439,11 @@ class MainActivity : AppCompatActivity() {
             layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Master Volume", 7, 100)))
             layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("Low Note", 87, 12 * 3 /* C2 */)))
             layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("High Note", 88, 12 * 8 /* C7 */ )))
+            layout.addView(labeledSliderView(
+                    context,
+                    theremidi,
+                    MidiParameter("Transpose", 102, 64 /* No transposition */, TransposeFormatter())
+            ))
             return ScrollView(context).apply { addView(layout) }
         }
     }
@@ -458,20 +467,6 @@ class MainActivity : AppCompatActivity() {
                 theremidi.setParam(85, it)
             }))
             return ScrollView(context).apply { addView(layout) }
-        }
-    }
-
-    class TransposeFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
-        override fun onCreateView(
-            i: LayoutInflater, c: ViewGroup?, s: Bundle?
-        ): View = ScrollView(context).apply {
-            addView(
-                labeledSliderView(
-                    context,
-                    theremidi,
-                    percentMidiParameter("Transpose", 102, 0)
-                )
-            )
         }
     }
 
