@@ -1,7 +1,6 @@
 // vim: set filetype=kotlin ts=4 sw=4 et:
 package me.ttclabs.theremo
 
-
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -15,11 +14,16 @@ import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.*
+import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.SeekBar.OnSeekBarChangeListener
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
@@ -27,10 +31,13 @@ import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import java.time.format.DateTimeFormatter
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import me.ttclabs.theremo.R
+
 
 const val MIDI_MAX_VALUE = 127
 
@@ -143,21 +150,24 @@ fun labeledSliderView(
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
     }
-    // initialize to default
-    val seek = MidiSeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), theremidi, parameter.cc, parameter.range, {
-        val humanReadable = it?.let { parameter.valToString(it) } ?: "???"
-        labelView.text = "${parameter.name} (CC ${parameter.cc}): ${humanReadable} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
-    }).apply {
+
+    val seek = MidiSeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), theremidi, parameter.cc, parameter.range).apply {
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             48.dpToPx(context)
         ).apply { topMargin = 8.dpToPx(context) }
     }
+    theremidi.setParamCallback(parameter.cc, {
+        seek.progress = it?:0
+        val humanReadable = it?.let { parameter.valToString(it) } ?: "???"
+        labelView.text = "${parameter.name} (CC ${parameter.cc}): ${humanReadable} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
+    })
+    theremidi.setParam(parameter.cc, theremidi.getCachedValue(parameter.cc))
 
     val resetBtn = Button(context).apply {
         text = "Default (${parameter.valToString(parameter.defaultValue())})"
         setOnClickListener {
-            seek.setProgressAndNotify(parameter.defaultValue())
+            theremidi.setParam(parameter.cc, parameter.defaultValue())
         }
     }
     val controls = LinearLayout(context).apply {
@@ -253,11 +263,15 @@ class ThereminiConnection(
 
 class ThereminiState(private val connection: ThereminiConnection) {
     private val midiParams = mutableMapOf<Int, Int?>()
+    private val callbacks = mutableMapOf<Int, ((value: Int?) -> Unit)?>()
 
-    fun setParam(cc: Int, value: Int) {
-        connection.sendCC(cc, value)
+    fun setParam(cc: Int, value: Int?) {
+        value?.let { connection.sendCC(cc, it) }
         midiParams[cc] = value
+        callbacks[cc]?.invoke(value)
     }
+
+    fun getAllParams(): Map<Int, Int?> = midiParams
 
     fun getCachedValue(cc: Int): Int? {
         return midiParams[cc]
@@ -270,79 +284,33 @@ class ThereminiState(private val connection: ThereminiConnection) {
     fun getConnection(): ThereminiConnection {
         return connection
     }
-}
 
-class ResettableSeekBar(
-    context: Context,
-    min: Int,
-    max: Int,
-    startValue: Int?,
-    attrs: AttributeSet? = null,
-    defStyleAttr: Int = android.R.attr.seekBarStyle
-) : SeekBar(context, attrs, defStyleAttr) {
-
-    init {
-        this.min = min
-        this.max = max
-        progress = startValue?:0
+    fun setParamCallback(cc: Int, cb: ((value: Int?) -> Unit)?) {
+        callbacks[cc] = cb
     }
-
-    private var userHasInteracted = false
-    private var externalListener: OnSeekBarChangeListener? = null
-
-    private val compositeListener = object : OnSeekBarChangeListener {
-        override fun onStartTrackingTouch(sb: SeekBar?) {
-            userHasInteracted = true
-            externalListener?.onStartTrackingTouch(sb)
-        }
-        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-            if (!userHasInteracted) return
-            externalListener?.onProgressChanged(sb, p, fromUser)
-        }
-        override fun onStopTrackingTouch(sb: SeekBar?) {
-            if (userHasInteracted) externalListener?.onStopTrackingTouch(sb)
-        }
-    }
-
-    init {
-        super.setOnSeekBarChangeListener(compositeListener)
-    }
-
-    override fun setOnSeekBarChangeListener(listener: OnSeekBarChangeListener?) {
-        externalListener = listener
-    }
-
-    /** Call to set progress programmatically *and* fire the listener **/
-    fun setProgressAndNotify(p: Int) {
-        userHasInteracted = true
-        super.setProgress(p)
-    }
-
-    /** Reset to “undefined” so next change comes only from user or setProgressAndNotify **/
-    fun reset() {
-        userHasInteracted = false
-    }
-
-    /** Check if it’s been explicitly set yet **/
-    fun hasBeenSet(): Boolean = userHasInteracted
 }
 
 fun MidiSeekBar (
     context: Context,
     theremidi: ThereminiState,
-    cc: Int = 0,
+    cc: Int,
     range: MidiControlRange,
-    changeCallback: (value: Int?) -> Unit
-): ResettableSeekBar {
-    val currentVal = theremidi.getCachedValue(cc)
-    var seekbar = ResettableSeekBar(context, range.min, range.max, currentVal)
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = android.R.attr.seekBarStyle
+): SeekBar {
+    var seekbar = SeekBar(context, attrs, defStyleAttr).apply {
+        min = range.min
+        max = range.max
+    }
+
     seekbar.setOnSeekBarChangeListener (object: OnSeekBarChangeListener {
         override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-            try {
-                theremidi.setParam(cc, p)
-                changeCallback(p)
-            } catch (e: Exception) {
-                Toast.makeText(context, "Failed to send MIDI CC $cc", Toast.LENGTH_SHORT).show()
+            if (fromUser) {
+                try {
+                    theremidi.setParam(cc, p)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Failed to send MIDI CC $cc", Toast.LENGTH_SHORT).show()
+                }
             }
         }
         override fun onStartTrackingTouch(sb: SeekBar?) {
@@ -350,9 +318,6 @@ fun MidiSeekBar (
         override fun onStopTrackingTouch(sb: SeekBar?) {
         }
     })
-
-    // Advertise current value to listeners
-    changeCallback(currentVal)
     return seekbar
 }
 
@@ -648,20 +613,6 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-class PresetFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
-    override fun onCreateView(
-        i: LayoutInflater, c: ViewGroup?, s: Bundle?
-    ): View {
-        val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Preset Volume", 103, 100)))
-        layout.addView(Button(context).apply {
-            text = "Save Preset (CC 119)"
-            setOnClickListener { theremidi.setParam(119, 0) }
-        })
-        return ScrollView(context).apply { addView(layout) }
-    }
-}
-
 class MidiLogFragment(private val context: Context, private val theremidi: ThereminiState) : Fragment() {
     private val timestampFmt = DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault())
     private val logBuffer = theremidi.getConnection().getMidiLogBuffer()
@@ -709,4 +660,136 @@ class DeviceSetupFragment(private val context: Context) : Fragment() {
             })
         })
     }
+}
+
+class PresetDB(context: Context) {
+    private val presets = context.getSharedPreferences("midi_presets", Context.MODE_PRIVATE)
+    private val gson = Gson()
+
+    fun savePreset(name: String, params: Map<Int, Int>) {
+        presets.edit()
+            .putString(name, gson.toJson(params))
+            .apply()
+    }
+
+    fun getPresetNames(): Collection<String> =
+        presets.all.keys.sorted()
+
+    fun loadPreset(name: String): Map<Int, Int>? {
+        val json = presets.getString(name, null) ?: return null
+        val type = object : TypeToken<Map<Int, Int>>() {}.type
+        return gson.fromJson(json, type)
+    }
+
+    fun deletePreset(name: String) {
+        presets.edit()
+            .remove(name)
+            .apply()
+    }
+}
+
+class PresetFragment(context: Context, private var theremidi: ThereminiState) : Fragment() {
+    private var db = PresetDB(context)
+    private var presetsContainer = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            MATCH_PARENT, WRAP_CONTENT
+        )
+    }
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        val layout = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        val saveLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                MATCH_PARENT, WRAP_CONTENT
+            ).apply { bottomMargin = 16.dp }
+        }
+        val nameEt = EditText(context).apply {
+            hint = "Preset name"
+            layoutParams = LinearLayout.LayoutParams(
+                0, WRAP_CONTENT, 1f
+            )
+        }
+        val saveBtn = Button(context).apply {
+            text = "SAVE"
+            layoutParams = LinearLayout.LayoutParams(
+                WRAP_CONTENT, WRAP_CONTENT
+            ).apply { marginStart = 8.dp }
+        }
+        saveLayout.addView(nameEt)
+        saveLayout.addView(saveBtn)
+        layout.addView(saveLayout)
+
+        layout.addView(TextView(context).apply { text = "Load a preset:" })
+        layout.addView(presetsContainer)
+
+        saveBtn.setOnClickListener {
+            val name = nameEt.text.toString().trim()
+            if (name.isEmpty()) return@setOnClickListener
+            if (db.getPresetNames().contains(name)) {
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Overwrite Preset?")
+                    .setMessage("A preset named '$name' already exists. Overwrite?")
+                    .setPositiveButton("Yes") { _, _ -> saveAndRefresh(name) }
+                    .setNegativeButton("No", null)
+                    .show()
+            } else saveAndRefresh(name)
+        }
+
+        loadPresets()
+        return layout
+    }
+
+    private fun saveAndRefresh(name: String) {
+        val params = theremidi.getAllParams().mapNotNull { (k, v) -> v?.let { k to it } }.toMap()
+        db.savePreset(name, params)
+        loadPresets()
+    }
+
+    private fun loadPresets() {
+        presetsContainer.removeAllViews()
+        db.getPresetNames().forEach { name ->
+            Button(requireContext()).apply {
+                text = name
+                layoutParams = LinearLayout.LayoutParams(
+                    MATCH_PARENT, WRAP_CONTENT
+                ).apply { topMargin = 8.dp }
+                setOnClickListener {
+                    db.loadPreset(name)?.let { loadPreset(it) }
+                }
+                setOnLongClickListener {
+                    AlertDialog.Builder(requireContext())
+                        .setTitle("Delete Preset")
+                        .setMessage("Are you sure you want to delete '$name'?")
+                        .setPositiveButton("Delete") { _, _ ->
+                            db.deletePreset(name)
+                            loadPresets()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    true
+                }
+            }.also { presetsContainer.addView(it) }
+        }
+    }
+
+    private fun loadPreset(params: Map<Int, Int>) {
+        params.forEach { cc, value ->
+            theremidi.setParam(cc, value)
+        }
+    }
+
+    private val Int.dp: Int
+        get() = (this * resources.displayMetrics.density).toInt()
 }
