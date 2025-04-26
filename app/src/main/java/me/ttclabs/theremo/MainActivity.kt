@@ -85,6 +85,38 @@ fun linearMidiParameter(name: String, cc: Int, min: Double, max: Double, default
     return MidiParameter(name, cc, defaultMidiVal, LinearMidiValueFormatter(min, max))
 }
 
+class NoteRangeFormatter : MidiValueFormatter {
+    // Notes go from C-1 to G9 (128 notes total)
+    // Stupid how some notes are called with # and some with b.
+    // But that's how they appear on the device's display :|
+    val notes = listOf("C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
+    override fun valToString(value: Int, min: Int, max: Int): String = "${notes[value % notes.size]}${value / 12 - 1}%"
+}
+
+fun noteRangeParameter(name: String, cc: Int, default: Int): MidiParameter {
+    return MidiParameter(name, cc, default, NoteRangeFormatter())
+}
+
+fun buttonGrid(context: Context, labels: Collection<String>, nCols: Int, clickCallback: (Int) -> Unit): View {
+    val buttons = labels.mapIndexed { idx, label ->
+        Button(context).apply {
+            text = label
+            setOnClickListener { clickCallback(idx) }
+        }
+    }
+    val layout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+    }
+    buttons.chunked(nCols).forEach { chunk ->
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        chunk.forEach { row.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)) }
+        layout.addView(row)
+    }
+    return layout
+}
+
 fun labeledSliderView(
     context: Context,
     theremidi: ThereminiState,
@@ -103,7 +135,7 @@ fun labeledSliderView(
     // initialize to default
     val seek = MidiSeekBar(ContextThemeWrapper(context, R.style.CustomSeekBar), theremidi, parameter.cc, parameter.range, {
         val humanReadable = it?.let { parameter.valToString(it) } ?: "???"
-        labelView.text = "${parameter.name}: ${humanReadable} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
+        labelView.text = "${parameter.name} (CC ${parameter.cc}): ${humanReadable} (min: ${parameter.valToString(parameter.range.min)}, max: ${parameter.valToString(parameter.range.max)})"
     }).apply {
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -401,8 +433,8 @@ class MainActivity : AppCompatActivity() {
         ): View = ScrollView(context).apply {
             val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Master Volume", 7, 100)))
-            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Low Note", 87, 0)))
-            layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("High Note", 88, 0)))
+            layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("Low Note", 87, 12 * 3 /* C2 */)))
+            layout.addView(labeledSliderView(context, theremidi, noteRangeParameter("High Note", 88, 12 * 8 /* C7 */ )))
             return ScrollView(context).apply { addView(layout) }
         }
     }
@@ -414,24 +446,17 @@ class MainActivity : AppCompatActivity() {
             val layout = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             layout.addView(labeledSliderView(context, theremidi, percentMidiParameter("Pitch Correction", 84, 0)))
             layout.addView(TextView(context).apply { text = "Root Note (CC 86)" })
-            listOf("C","C#","D","D#","E","F","F#","G","G#","A","A#","B")
-            .forEachIndexed { idx, name ->
-                layout.addView(Button(context).apply {
-                    text = name
-                    setOnClickListener { theremidi.setParam(86, idx) }
-                })
-            }
+            layout.addView(buttonGrid(context, listOf("C","C#","D","D#","E","F","F#","G","G#","A","A#","B"), 4, {
+                theremidi.setParam(86, it)
+            }))
             layout.addView(TextView(context).apply { text = "Scale (CC 85)" })
-            listOf(
+            layout.addView(buttonGrid(context, listOf(
                 "Chromatic","Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian",
                 "Locrian","Maj Blues","Min Blues","Dim","Maj Penta","Min Penta","Spanish",
                 "Gypsy","Arabian","Egyptian","Ryukyu","Wholetone","Maj 3rd","Min 3rd","5th"
-            ).forEachIndexed { idx, name ->
-                layout.addView(Button(context).apply {
-                    text = "$idx: $name"
-                    setOnClickListener { theremidi.setParam(85, idx) }
-                })
-            }
+            ), 3, {
+                theremidi.setParam(85, it)
+            }))
             return ScrollView(context).apply { addView(layout) }
         }
     }
