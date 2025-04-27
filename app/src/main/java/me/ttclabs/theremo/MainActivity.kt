@@ -690,6 +690,7 @@ class PresetFragment(context: Context, private var theremidi: ThereminiState) : 
             MATCH_PARENT, WRAP_CONTENT
         )
     }
+    val nameInput = EditText(context)
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -709,19 +710,15 @@ class PresetFragment(context: Context, private var theremidi: ThereminiState) : 
                 MATCH_PARENT, WRAP_CONTENT
             ).apply { bottomMargin = 16.dp }
         }
-        val nameEt = EditText(context).apply {
-            hint = "Preset name"
-            layoutParams = LinearLayout.LayoutParams(
-                0, WRAP_CONTENT, 1f
-            )
-        }
+        nameInput.hint = "Preset name"
+        nameInput.layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
         val saveBtn = Button(context).apply {
             text = "SAVE"
             layoutParams = LinearLayout.LayoutParams(
                 WRAP_CONTENT, WRAP_CONTENT
             ).apply { marginStart = 8.dp }
         }
-        saveLayout.addView(nameEt)
+        saveLayout.addView(nameInput)
         saveLayout.addView(saveBtn)
         layout.addView(saveLayout)
 
@@ -729,12 +726,12 @@ class PresetFragment(context: Context, private var theremidi: ThereminiState) : 
         layout.addView(presetsContainer)
 
         saveBtn.setOnClickListener {
-            val name = nameEt.text.toString().trim()
+            val name = nameInput.text.toString().trim().toUpperCase()
             if (name.isEmpty()) return@setOnClickListener
             if (db.getPresetNames().contains(name)) {
                 AlertDialog.Builder(requireContext())
-                    .setTitle("Overwrite Preset?")
-                    .setMessage("A preset named '$name' already exists. Overwrite?")
+                    .setTitle("Overwrite Preset '${name}'?")
+                    .setMessage("A preset named '${name}' already exists. Overwrite?")
                     .setPositiveButton("Yes") { _, _ -> saveAndRefresh(name) }
                     .setNegativeButton("No", null)
                     .show()
@@ -760,7 +757,10 @@ class PresetFragment(context: Context, private var theremidi: ThereminiState) : 
                     MATCH_PARENT, WRAP_CONTENT
                 ).apply { topMargin = 8.dp }
                 setOnClickListener {
-                    db.loadPreset(name)?.let { loadPreset(it) }
+                    db.loadPreset(name)?.let {
+                        loadPreset(it)
+                        nameInput.setText(name)
+                    }
                 }
                 setOnLongClickListener {
                     AlertDialog.Builder(requireContext())
